@@ -1,0 +1,20 @@
+hello .	你好。
+how are you ?	你好吗？
+i am a student .	我是一名学生。
+i love natural language processing .	我喜欢自然语言处理。
+transformer is a powerful neural network architecture .	Transformer是一种强大的神经网络架构。
+attention mechanism helps the model focus on important words .	注意力机制帮助模型关注重要的词。
+machine translation converts one language into another language .	机器翻译把一种语言转换成另一种语言。
+deep learning has changed artificial intelligence .	深度学习改变了人工智能。
+this course is very interesting .	这门课程很有趣。
+we need to train a translation model .	我们需要训练一个翻译模型。
+the weather is nice today .	今天天气很好。
+please open the window .	请打开窗户。
+thank you very much .	非常感谢你。
+where is the library ?	图书馆在哪里？
+the model learns from bilingual sentence pairs .	模型从双语句对中学习。
+beam search can improve translation quality .	束搜索可以提升翻译质量。
+positional encoding provides word order information .	位置编码提供词序信息。
+the decoder generates chinese tokens step by step .	解码器逐步生成中文标记。
+we evaluate the system with bleu score .	我们使用BLEU分数评估系统。
+large datasets usually produce better translation results .	大规模数据集通常会产生更好的翻译结果。
