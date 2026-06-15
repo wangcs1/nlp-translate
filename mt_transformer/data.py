@@ -70,11 +70,13 @@ def build_loader(
     batch_size: int,
     max_len: int,
     shuffle: bool,
+    num_workers: int = 0,
 ) -> DataLoader:
     dataset = TranslationDataset(examples, tokenizer, max_len=max_len)
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
+        num_workers=num_workers,
         collate_fn=make_collate_fn(tokenizer.pad_id),
     )

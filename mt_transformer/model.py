@@ -23,6 +23,17 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
+class LearnedPositionalEmbedding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 512, dropout: float = 0.1) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(max_len, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        positions = torch.arange(x.size(1), device=x.device).unsqueeze(0).expand(x.size(0), -1)
+        return self.dropout(x + self.embedding(positions))
+
+
 class TransformerTranslator(nn.Module):
     def __init__(
         self,
@@ -35,13 +46,21 @@ class TransformerTranslator(nn.Module):
         dim_feedforward: int = 1024,
         dropout: float = 0.1,
         max_len: int = 512,
+        share_embeddings: bool = True,
+        share_decoder_generator: bool = True,
+        learned_positional: bool = False,
+        activation: str = "gelu",
     ) -> None:
         super().__init__()
         self.pad_id = pad_id
         self.d_model = d_model
         self.src_embed = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
-        self.tgt_embed = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
-        self.positional = PositionalEncoding(d_model, dropout, max_len=max_len)
+        self.tgt_embed = self.src_embed if share_embeddings else nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
+        self.positional = (
+            LearnedPositionalEmbedding(d_model, max_len=max_len, dropout=dropout)
+            if learned_positional
+            else PositionalEncoding(d_model, dropout, max_len=max_len)
+        )
         self.transformer = nn.Transformer(
             d_model=d_model,
             nhead=nhead,
@@ -49,21 +68,29 @@ class TransformerTranslator(nn.Module):
             num_decoder_layers=num_decoder_layers,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
+            activation=activation,
             batch_first=True,
             norm_first=True,
         )
         self.generator = nn.Linear(d_model, vocab_size)
+        if share_decoder_generator:
+            self.generator.weight = self.tgt_embed.weight
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
         for parameter in self.parameters():
             if parameter.dim() > 1:
                 nn.init.xavier_uniform_(parameter)
+        if self.generator.bias is not None:
+            nn.init.zeros_(self.generator.bias)
 
     def forward(self, src: torch.Tensor, tgt_in: torch.Tensor) -> torch.Tensor:
         src_key_padding_mask = src.eq(self.pad_id)
         tgt_key_padding_mask = tgt_in.eq(self.pad_id)
-        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_in.size(1), device=tgt_in.device)
+        tgt_mask = torch.triu(
+            torch.ones(tgt_in.size(1), tgt_in.size(1), dtype=torch.bool, device=tgt_in.device),
+            diagonal=1,
+        )
 
         src_emb = self.positional(self.src_embed(src) * math.sqrt(self.d_model))
         tgt_emb = self.positional(self.tgt_embed(tgt_in) * math.sqrt(self.d_model))
@@ -91,7 +118,7 @@ class TransformerTranslator(nn.Module):
         memory: torch.Tensor,
         src_key_padding_mask: torch.Tensor,
     ) -> torch.Tensor:
-        tgt_mask = nn.Transformer.generate_square_subsequent_mask(ys.size(1), device=ys.device)
+        tgt_mask = torch.triu(torch.ones(ys.size(1), ys.size(1), dtype=torch.bool, device=ys.device), diagonal=1)
         tgt_emb = self.positional(self.tgt_embed(ys) * math.sqrt(self.d_model))
         out = self.transformer.decoder(
             tgt_emb,

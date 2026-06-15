@@ -54,6 +54,10 @@ def load_model(checkpoint_path: str | Path, tokenizer_path: str | Path, device: 
         dim_feedforward=config["ffn_dim"],
         dropout=config["dropout"],
         max_len=config["max_len"],
+        share_embeddings=config.get("share_embeddings", False),
+        share_decoder_generator=config.get("share_decoder_generator", False),
+        learned_positional=config.get("learned_positional", False),
+        activation=config.get("activation", "relu"),
     ).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()

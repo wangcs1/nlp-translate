@@ -14,11 +14,15 @@ class NoamScheduler:
         self.step_num = 0
 
     def step(self) -> float:
+        lr = self.advance()
+        self.optimizer.step()
+        return lr
+
+    def advance(self) -> float:
         self.step_num += 1
         lr = self.rate()
         for group in self.optimizer.param_groups:
             group["lr"] = lr
-        self.optimizer.step()
         return lr
 
     def zero_grad(self) -> None:
