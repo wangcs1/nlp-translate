@@ -1,2 +1,10 @@
 checkpoints
 data/en_zh_10k.tsv
+data/en_zh_quality.tsv
+data/*.cache
+outputs
+__pycache__
+*/__pycache__
+.pytest_cache
+.mypy_cache
+data

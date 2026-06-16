@@ -16,44 +16,42 @@ from .optim import NoamScheduler
 from .tokenizer import BPETokenizer
 
 
-MODEL_PRESETS = {
-    "tiny": {"d_model": 192, "nhead": 6, "layers": 3, "ffn_dim": 768, "dropout": 0.15},
-    "small": {"d_model": 256, "nhead": 8, "layers": 4, "ffn_dim": 1024, "dropout": 0.15},
-    "base": {"d_model": 512, "nhead": 8, "layers": 6, "ffn_dim": 2048, "dropout": 0.1},
-    "fancy": {"d_model": 512, "nhead": 8, "layers": 8, "ffn_dim": 2048, "dropout": 0.1},
+FANCY_CONFIG = {
+    "d_model": 512,
+    "nhead": 8,
+    "layers": 8,
+    "ffn_dim": 2048,
+    "dropout": 0.1,
 }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a Transformer EN-ZH translator.")
-    parser.add_argument("--data", default="data/sample_en_zh.tsv", help="TSV file: English<TAB>Chinese.")
+    parser.add_argument("--data", default="data/en_zh_quality.tsv", help="TSV file: English<TAB>Chinese.")
     parser.add_argument("--extra-data", nargs="*", default=[], help="Optional extra TSV files to merge.")
     parser.add_argument("--save-dir", default="checkpoints/transformer_en_zh")
-    parser.add_argument("--epochs", type=int, default=60)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--max-len", type=int, default=96)
-    parser.add_argument("--vocab-size", type=int, default=2000)
-    parser.add_argument("--min-freq", type=int, default=1)
-    parser.add_argument("--preset", choices=sorted(MODEL_PRESETS), default="small")
-    parser.add_argument("--d-model", type=int)
-    parser.add_argument("--nhead", type=int)
-    parser.add_argument("--layers", type=int)
-    parser.add_argument("--ffn-dim", type=int)
-    parser.add_argument("--dropout", type=float)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=48)
+    parser.add_argument("--max-len", type=int, default=128)
+    parser.add_argument("--vocab-size", type=int, default=8000)
+    parser.add_argument("--min-freq", type=int, default=2)
+    parser.add_argument("--d-model", type=int, default=FANCY_CONFIG["d_model"])
+    parser.add_argument("--nhead", type=int, default=FANCY_CONFIG["nhead"])
+    parser.add_argument("--layers", type=int, default=FANCY_CONFIG["layers"])
+    parser.add_argument("--ffn-dim", type=int, default=FANCY_CONFIG["ffn_dim"])
+    parser.add_argument("--dropout", type=float, default=FANCY_CONFIG["dropout"])
     parser.add_argument("--share-embeddings", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--share-decoder-generator", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--learned-positional", action="store_true")
+    parser.add_argument("--learned-positional", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--activation", choices=["relu", "gelu"], default="gelu")
     parser.add_argument("--label-smoothing", type=float, default=0.1)
-    parser.add_argument("--warmup-steps", type=int, default=400)
+    parser.add_argument("--warmup-steps", type=int, default=4000)
     parser.add_argument("--grad-accum-steps", type=int, default=1)
-    parser.add_argument("--patience", type=int, default=12)
+    parser.add_argument("--patience", type=int, default=6)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--amp", action="store_true", help="Use CUDA mixed precision training.")
     parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
-    apply_model_preset(args)
-    return args
+    return parser.parse_args()
 
 
 def main() -> None:
@@ -197,13 +195,6 @@ def run_epoch(
         total_tokens += tokens
         iterator.set_postfix(loss=loss.item())
     return total_loss / max(1, total_tokens)
-
-
-def apply_model_preset(args: argparse.Namespace) -> None:
-    preset = MODEL_PRESETS[args.preset]
-    for name, value in preset.items():
-        if getattr(args, name) is None:
-            setattr(args, name, value)
 
 
 def load_examples(data_path: str, extra_paths: list[str]):

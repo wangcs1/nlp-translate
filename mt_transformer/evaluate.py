@@ -12,11 +12,12 @@ from .translate import load_model
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate EN-ZH translator with BLEU.")
-    parser.add_argument("--data", default="data/sample_en_zh.tsv")
+    parser.add_argument("--data", default="data/en_zh_quality.tsv")
     parser.add_argument("--checkpoint", default="checkpoints/transformer_en_zh/best.pt")
     parser.add_argument("--tokenizer", default="checkpoints/transformer_en_zh/tokenizer.json")
     parser.add_argument("--beam-size", type=int, default=4)
     parser.add_argument("--max-len", type=int, default=80)
+    parser.add_argument("--limit", type=int, help="Evaluate only the first N examples.")
     return parser.parse_args()
 
 
@@ -25,6 +26,8 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, tokenizer = load_model(args.checkpoint, args.tokenizer, device)
     examples = read_parallel_tsv(args.data)
+    if args.limit:
+        examples = examples[: args.limit]
     hypotheses = [
         beam_translate(model, tokenizer, ex.src, device, beam_size=args.beam_size, max_len=args.max_len)
         for ex in examples
