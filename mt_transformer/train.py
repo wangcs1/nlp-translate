@@ -21,7 +21,7 @@ FANCY_CONFIG = {
     "nhead": 8,
     "layers": 8,
     "ffn_dim": 2048,
-    "dropout": 0.1,
+    "dropout": 0.2,
 }
 
 
@@ -30,10 +30,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", default="data/en_zh_quality.tsv", help="TSV file: English<TAB>Chinese.")
     parser.add_argument("--extra-data", nargs="*", default=[], help="Optional extra TSV files to merge.")
     parser.add_argument("--save-dir", default="checkpoints/transformer_en_zh")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=48)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-len", type=int, default=128)
-    parser.add_argument("--vocab-size", type=int, default=8000)
+    parser.add_argument("--vocab-size", type=int, default=32000)
     parser.add_argument("--min-freq", type=int, default=2)
     parser.add_argument("--d-model", type=int, default=FANCY_CONFIG["d_model"])
     parser.add_argument("--nhead", type=int, default=FANCY_CONFIG["nhead"])
@@ -43,11 +43,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--share-embeddings", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--share-decoder-generator", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--learned-positional", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--activation", choices=["relu", "gelu"], default="gelu")
+    parser.add_argument("--activation", choices=["swiglu"], default="swiglu")
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--warmup-steps", type=int, default=4000)
+    parser.add_argument("--lr-factor", type=float, default=1.0)
     parser.add_argument("--grad-accum-steps", type=int, default=1)
-    parser.add_argument("--patience", type=int, default=6)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--amp", action="store_true", help="Use CUDA mixed precision training.")
     parser.add_argument("--seed", type=int, default=42)
@@ -102,12 +102,11 @@ def main() -> None:
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), betas=(0.9, 0.98), eps=1e-9, weight_decay=1e-4)
-    scheduler = NoamScheduler(optimizer, d_model=args.d_model, warmup_steps=args.warmup_steps)
+    scheduler = NoamScheduler(optimizer, d_model=args.d_model, warmup_steps=args.warmup_steps, factor=args.lr_factor)
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, label_smoothing=args.label_smoothing)
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
 
     best_valid = math.inf
-    bad_epochs = 0
     for epoch in range(1, args.epochs + 1):
         train_loss = run_epoch(
             model,
@@ -132,24 +131,21 @@ def main() -> None:
             amp=False,
         )
         print(f"epoch={epoch:03d} train_loss={train_loss:.4f} valid_loss={valid_loss:.4f}")
+        checkpoint = {
+            "model_state": model.state_dict(),
+            "config": vars(args),
+            "vocab_size": len(tokenizer.itos),
+            "pad_id": tokenizer.pad_id,
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "valid_loss": valid_loss,
+        }
+        torch.save(checkpoint, save_dir / "last.pt")
+        append_history(save_dir / "history.tsv", epoch, train_loss, valid_loss)
         if valid_loss < best_valid:
             best_valid = valid_loss
-            bad_epochs = 0
-            torch.save(
-                {
-                    "model_state": model.state_dict(),
-                    "config": vars(args),
-                    "vocab_size": len(tokenizer.itos),
-                    "pad_id": tokenizer.pad_id,
-                },
-                save_dir / "best.pt",
-            )
+            torch.save(checkpoint, save_dir / "best.pt")
             print(f"  saved best checkpoint to {save_dir / 'best.pt'}")
-        else:
-            bad_epochs += 1
-            if bad_epochs >= args.patience:
-                print(f"early stopping after {args.patience} epochs without validation improvement")
-                break
 
 
 def run_epoch(
@@ -217,6 +213,14 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def append_history(path: Path, epoch: int, train_loss: float, valid_loss: float) -> None:
+    exists = path.exists()
+    with path.open("a", encoding="utf-8") as f:
+        if not exists:
+            f.write("epoch\ttrain_loss\tvalid_loss\n")
+        f.write(f"{epoch}\t{train_loss:.6f}\t{valid_loss:.6f}\n")
 
 
 if __name__ == "__main__":

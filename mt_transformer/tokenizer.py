@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import re
-from collections import Counter
+import os
+import tempfile
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Iterable
 
@@ -11,56 +12,85 @@ PAD = "<pad>"
 BOS = "<bos>"
 EOS = "<eos>"
 UNK = "<unk>"
-SPECIAL_TOKENS = [PAD, BOS, EOS, UNK]
 
 
 class BPETokenizer:
-    """A compact shared tokenizer for English and Chinese text.
+    """SentencePiece unigram tokenizer with the old class name kept for compatibility."""
 
-    The name is kept for compatibility with the rest of the project, but the
-    implementation is now a fast shared vocabulary built from the training
-    corpus. English words, numbers, Chinese characters, and punctuation are
-    all tokenized with the same vocabulary.
-    """
-
-    def __init__(self, vocab_size: int = 4000, min_freq: int = 2) -> None:
+    def __init__(self, vocab_size: int = 16000, min_freq: int = 2) -> None:
         self.vocab_size = vocab_size
         self.min_freq = min_freq
-        self.stoi: dict[str, int] = {tok: idx for idx, tok in enumerate(SPECIAL_TOKENS)}
-        self.itos: list[str] = list(SPECIAL_TOKENS)
+        self.model_proto: bytes | None = None
+        self.sp = None
 
     @property
     def pad_id(self) -> int:
-        return self.stoi[PAD]
+        return 0
 
     @property
     def bos_id(self) -> int:
-        return self.stoi[BOS]
+        return 1
 
     @property
     def eos_id(self) -> int:
-        return self.stoi[EOS]
+        return 2
 
     @property
     def unk_id(self) -> int:
-        return self.stoi[UNK]
+        return 3
+
+    @property
+    def itos(self) -> list[str]:
+        processor = self._processor()
+        return [processor.id_to_piece(i) for i in range(processor.get_piece_size())]
 
     def train(self, texts: Iterable[str]) -> None:
-        counter: Counter[str] = Counter()
-        for text in texts:
-            counter.update(self._basic_tokens(text))
+        try:
+            import sentencepiece as spm
+        except ImportError as exc:
+            raise SystemExit("Please install sentencepiece first: pip install -r requirements.txt") from exc
+        if hasattr(spm, "set_min_log_level"):
+            spm.set_min_log_level(2)
+        elif hasattr(spm, "SetMinLogLevel"):
+            spm.SetMinLogLevel(2)
 
-        vocab_tokens = [
-            token
-            for token, freq in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-            if freq >= self.min_freq and token not in SPECIAL_TOKENS
-        ]
-        limit = max(0, self.vocab_size - len(SPECIAL_TOKENS))
-        self.itos = list(SPECIAL_TOKENS) + vocab_tokens[:limit]
-        self.stoi = {tok: idx for idx, tok in enumerate(self.itos)}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            corpus_path = tmp_root / "spm_corpus.txt"
+            model_prefix = tmp_root / "spm"
+            corpus_path.write_text("\n".join(str(text).strip() for text in texts if str(text).strip()), encoding="utf-8")
+            vocab_size = max(self.vocab_size, 4000)
+            with (
+                open(os.devnull, "w", encoding="utf-8") as devnull,
+                redirect_stdout(devnull),
+                redirect_stderr(devnull),
+            ):
+                spm.SentencePieceTrainer.train(
+                    input=str(corpus_path),
+                    model_prefix=str(model_prefix),
+                    vocab_size=vocab_size,
+                    model_type="unigram",
+                    character_coverage=0.9995,
+                    pad_id=self.pad_id,
+                    bos_id=self.bos_id,
+                    eos_id=self.eos_id,
+                    unk_id=self.unk_id,
+                    pad_piece=PAD,
+                    bos_piece=BOS,
+                    eos_piece=EOS,
+                    unk_piece=UNK,
+                    split_by_unicode_script=True,
+                    byte_fallback=True,
+                    train_extremely_large_corpus=True,
+                    hard_vocab_limit=False,
+                    input_sentence_size=1000000,
+                    shuffle_input_sentence=True,
+                )
+            self.model_proto = (model_prefix.with_suffix(".model")).read_bytes()
+        self.sp = self._load_processor(self.model_proto)
 
     def encode(self, text: str, add_special: bool = True, max_len: int | None = None) -> list[int]:
-        ids = [self.stoi.get(tok, self.unk_id) for tok in self._basic_tokens(text)]
+        ids = list(self._processor().encode(str(text), out_type=int))
         if add_special:
             ids = [self.bos_id] + ids + [self.eos_id]
         if max_len is not None:
@@ -70,63 +100,43 @@ class BPETokenizer:
         return ids
 
     def decode(self, ids: Iterable[int]) -> str:
-        tokens = []
-        for idx in ids:
-            if idx in (self.pad_id, self.bos_id, self.eos_id):
-                continue
-            token = self.itos[int(idx)] if int(idx) < len(self.itos) else UNK
-            if token != UNK:
-                tokens.append(token)
-        text = self._join_tokens(tokens)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
+        clean_ids = [int(idx) for idx in ids if int(idx) not in (self.pad_id, self.bos_id, self.eos_id)]
+        return self._processor().decode(clean_ids).strip()
 
     def save(self, path: str | Path) -> None:
+        if self.model_proto is None:
+            raise ValueError("Tokenizer has not been trained.")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "type": "sentencepiece_unigram",
             "vocab_size": self.vocab_size,
             "min_freq": self.min_freq,
-            "itos": self.itos,
+            "model_hex": self.model_proto.hex(),
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     @classmethod
     def load(cls, path: str | Path) -> "BPETokenizer":
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        tokenizer = cls(payload["vocab_size"], payload["min_freq"])
-        tokenizer.itos = payload["itos"]
-        tokenizer.stoi = {tok: idx for idx, tok in enumerate(tokenizer.itos)}
+        tokenizer = cls(payload["vocab_size"], payload.get("min_freq", 1))
+        tokenizer.model_proto = bytes.fromhex(payload["model_hex"])
+        tokenizer.sp = tokenizer._load_processor(tokenizer.model_proto)
         return tokenizer
 
-    @staticmethod
-    def _basic_tokens(text: str) -> list[str]:
-        text = text.strip().lower()
-        chinese = r"[\u4e00-\u9fff]"
-        english_or_num = r"[a-zA-Z0-9]+(?:'[a-z]+)?"
-        punct = r"[^\s]"
-        return re.findall(f"{chinese}|{english_or_num}|{punct}", text)
+    def _processor(self):
+        if self.sp is None:
+            if self.model_proto is None:
+                raise ValueError("Tokenizer has not been trained.")
+            self.sp = self._load_processor(self.model_proto)
+        return self.sp
 
     @staticmethod
-    def _join_tokens(tokens: list[str]) -> str:
-        pieces: list[str] = []
-        for token in tokens:
-            if not pieces:
-                pieces.append(token)
-                continue
-            prev = pieces[-1]
-            if re.fullmatch(r"[\u4e00-\u9fff]", token):
-                pieces.append(token)
-            elif re.fullmatch(r"[A-Za-z0-9]+(?:'[a-z]+)?", token):
-                if re.fullmatch(r"[A-Za-z0-9]+(?:'[a-z]+)?", prev):
-                    pieces.append(" " + token)
-                else:
-                    pieces.append(token)
-            else:
-                if token in {".", ",", "?", "!", ":", ";", ")", "]", "}"}:
-                    pieces.append(token)
-                elif token in {"(", "[", "{"}:
-                    pieces.append(" " + token)
-                else:
-                    pieces.append(token)
-        return "".join(pieces)
+    def _load_processor(model_proto: bytes):
+        try:
+            import sentencepiece as spm
+        except ImportError as exc:
+            raise SystemExit("Please install sentencepiece first: pip install -r requirements.txt") from exc
+        processor = spm.SentencePieceProcessor()
+        processor.LoadFromSerializedProto(model_proto)
+        return processor
